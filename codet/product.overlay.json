@@ -1,0 +1,13 @@
+{
+  "nameShort": "Codet",
+  "nameLong": "Codet",
+  "applicationName": "codet",
+  "dataFolderName": ".codet",
+  "linuxIconName": "codet",
+  "urlProtocol": "codet",
+  "serverApplicationName": "codet-server",
+  "serverDataFolderName": ".codet-server",
+  "tunnelApplicationName": "codet-tunnel",
+  "licenseUrl": "https://github.com/todouu/codet/blob/master/LICENSE",
+  "reportIssueUrl": "https://github.com/todouu/codet/issues/new"
+}

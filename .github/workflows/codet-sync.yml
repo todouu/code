@@ -1,0 +1,27 @@
+name: Codet - Sync upstream (best effort)
+
+# The release workflow always merges the pinned upstream commit at build time,
+# so building never depends on this job. It only keeps master close to upstream.
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "43 3 * * *"
+
+permissions: {}
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Merge upstream
+        run: ./codet/merge_upstream.sh
+
+      - name: Push
+        continue-on-error: true
+        run: git push origin HEAD:master
