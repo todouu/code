@@ -1,0 +1,13 @@
+{
+  "nameShort": "Code",
+  "nameLong": "Code",
+  "applicationName": "code",
+  "dataFolderName": ".code",
+  "linuxIconName": "code",
+  "urlProtocol": "code",
+  "serverApplicationName": "code-server",
+  "serverDataFolderName": ".code-server",
+  "tunnelApplicationName": "code-tunnel",
+  "licenseUrl": "https://github.com/todouu/code/blob/master/LICENSE",
+  "reportIssueUrl": "https://github.com/todouu/code/issues/new"
+}

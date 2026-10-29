@@ -1,0 +1,275 @@
+diff --git a/cli/src/state.rs b/cli/src/state.rs
+index 7514c3b3..8043033e 100644
+--- a/cli/src/state.rs
++++ b/cli/src/state.rs
+@@ -15,13 +15,22 @@ use std::{
+ use serde::{de::DeserializeOwned, Serialize};
+ 
+ use crate::{
+-	constants::{DEFAULT_DATA_PARENT_DIR, SERVER_DATA_PARENT_DIR, VSCODE_CLI_QUALITY},
++	constants::{DEFAULT_DATA_PARENT_DIR, PRODUCT_NAME_SHORT, SERVER_DATA_PARENT_DIR, VSCODE_CLI_QUALITY},
+ 	download_cache::DownloadCache,
+ 	util::errors::{wrap, AnyError, NoHomeForLauncherError, WrappedError},
+ };
+ 
+ const HOME_DIR_ALTS: [&str; 2] = ["$HOME", "~"];
+ 
++/// XDG: default CLI data root is `$XDG_DATA_HOME/<product>/cli` (relative values are ignored).
++fn default_cli_root() -> Option<PathBuf> {
++	let base = match std::env::var_os("XDG_DATA_HOME") {
++		Some(v) if Path::new(&v).is_absolute() => PathBuf::from(v),
++		_ => dirs::home_dir()?.join(".local").join("share"),
++	};
++	Some(base.join(PRODUCT_NAME_SHORT).join("cli"))
++}
++
+ #[derive(Clone)]
+ pub struct LauncherPaths {
+ 	pub server_cache: DownloadCache,
+@@ -149,25 +158,10 @@ impl LauncherPaths {
+ 			}
+ 		}
+ 
+-		let home_dir = match dirs::home_dir() {
+-			None => return Self::new(root),
+-			Some(d) => d,
+-		};
+-
+-		let old_dir = home_dir.join(".vscode-cli");
+-		let mut new_dir = home_dir;
+-		new_dir.push(DEFAULT_DATA_PARENT_DIR);
+-		new_dir.push("cli");
+-		if !old_dir.exists() || new_dir.exists() {
+-			return Self::new_for_path(new_dir);
++		match default_cli_root() {
++			Some(dir) => Self::new_for_path(dir),
++			None => Self::new(root),
+ 		}
+-
+-		if let Err(e) = std::fs::rename(&old_dir, &new_dir) {
+-			// no logger exists at this point in the lifecycle, so just log to stderr
+-			eprintln!("Failed to migrate old CLI data directory, will create a new one ({e})");
+-		}
+-
+-		Self::new_for_path(new_dir)
+ 	}
+ 
+ 	pub fn new(root: Option<String>) -> Result<LauncherPaths, AnyError> {
+@@ -184,7 +178,10 @@ impl LauncherPaths {
+ 			}
+ 		}
+ 
+-		Self::new_for_root_string(format!("~/{DEFAULT_DATA_PARENT_DIR}/cli"))
++		match default_cli_root() {
++			Some(dir) => Self::new_for_path(dir),
++			None => Self::new_for_root_string(format!("~/{DEFAULT_DATA_PARENT_DIR}/cli")),
++		}
+ 	}
+ 
+ 	fn new_for_root_string(root: String) -> Result<LauncherPaths, AnyError> {
+@@ -286,10 +283,7 @@ impl LauncherPaths {
+ 					.join("cli");
+ 			}
+ 		}
+-		match dirs::home_dir() {
+-			Some(home) => home.join(SERVER_DATA_PARENT_DIR).join("cli"),
+-			None => self.root.clone(),
+-		}
++		default_cli_root().unwrap_or_else(|| self.root.clone())
+ 	}
+ 
+ 	/// Suggested path for web server storage
+diff --git a/src/mainImpl.ts b/src/mainImpl.ts
+index 3439f4a6..49a0ae93 100644
+--- a/src/mainImpl.ts
++++ b/src/mainImpl.ts
+@@ -461,7 +461,7 @@ function createDefaultArgvConfigSync(argvConfigPath: string): void {
+ 		// Ensure argv config parent exists
+ 		const argvConfigPathDirname = path.dirname(argvConfigPath);
+ 		if (!fs.existsSync(argvConfigPathDirname)) {
+-			fs.mkdirSync(argvConfigPathDirname);
++			fs.mkdirSync(argvConfigPathDirname, { recursive: true });
+ 		}
+ 
+ 		// Default argv content
+@@ -493,12 +493,11 @@ function getArgvConfigPath(): string {
+ 		return path.join(vscodePortable, 'argv.json');
+ 	}
+ 
+-	let dataFolderName = product.dataFolderName;
+-	if (process.env['VSCODE_DEV']) {
+-		dataFolderName = `${dataFolderName}-dev`;
+-	}
++	// XDG: argv.json lives next to the user data under $XDG_CONFIG_HOME
++	const xdgConfig = process.env['XDG_CONFIG_HOME'];
++	const configHome = xdgConfig && path.isAbsolute(xdgConfig) ? xdgConfig : path.join(os.homedir(), '.config');
+ 
+-	return path.join(os.homedir(), dataFolderName!, 'argv.json');
++	return path.join(configHome, product.nameShort, 'argv.json');
+ }
+ 
+ function configureCrashReporter(): void {
+diff --git a/src/vs/platform/environment/common/environmentService.ts b/src/vs/platform/environment/common/environmentService.ts
+index 7f0af774..b570b6b2 100644
+--- a/src/vs/platform/environment/common/environmentService.ts
++++ b/src/vs/platform/environment/common/environmentService.ts
+@@ -16,6 +16,24 @@ import { IProductService } from '../../product/common/productService.js';
+ 
+ export const EXTENSION_IDENTIFIER_WITH_LOG_REGEX = /^([^.]+\..+)[:=](.+)$/;
+ 
++// XDG Base Directory helpers: per spec, relative values must be ignored.
++function xdgDir(envName: string, homeDir: string, fallback: string): string {
++	const value = env[envName];
++	return value && value.startsWith('/') ? value : join(homeDir, fallback);
++}
++
++export function getXdgConfigDir(homeDir: string, productName: string): string {
++	return join(xdgDir('XDG_CONFIG_HOME', homeDir, '.config'), productName);
++}
++
++export function getXdgDataDir(homeDir: string, productName: string): string {
++	return join(xdgDir('XDG_DATA_HOME', homeDir, '.local/share'), productName);
++}
++
++export function getXdgStateDir(homeDir: string, productName: string): string {
++	return join(xdgDir('XDG_STATE_HOME', homeDir, '.local/state'), productName);
++}
++
+ export interface INativeEnvironmentPaths {
+ 
+ 	/**
+@@ -103,7 +121,7 @@ export abstract class AbstractNativeEnvironmentService implements INativeEnviron
+ 			return URI.file(join(vscodePortable, 'argv.json'));
+ 		}
+ 
+-		return joinPath(this.userHome, this.productService.dataFolderName, 'argv.json');
++		return URI.file(join(getXdgConfigDir(this.userHome.fsPath, this.productService.nameShort), 'argv.json'));
+ 	}
+ 
+ 	@memoize
+@@ -149,7 +167,7 @@ export abstract class AbstractNativeEnvironmentService implements INativeEnviron
+ 			return join(vscodePortable, 'extensions');
+ 		}
+ 
+-		return joinPath(this.userHome, this.productService.dataFolderName, 'extensions').fsPath;
++		return join(getXdgDataDir(this.userHome.fsPath, this.productService.nameShort), 'extensions');
+ 	}
+ 
+ 	@memoize
+@@ -164,7 +182,7 @@ export abstract class AbstractNativeEnvironmentService implements INativeEnviron
+ 			return URI.file(join(vscodePortable, 'shared-data'));
+ 		}
+ 
+-		return joinPath(this.userHome, this.productService.sharedDataFolderName);
++		return URI.file(join(getXdgDataDir(this.userHome.fsPath, this.productService.nameShort), 'shared'));
+ 	}
+ 
+ 	@memoize
+@@ -276,7 +294,7 @@ export abstract class AbstractNativeEnvironmentService implements INativeEnviron
+ 				return URI.file(join(vscodePortable, 'policy.json'));
+ 			}
+ 
+-			return joinPath(this.userHome, this.productService.dataFolderName, 'policy.json');
++			return URI.file(join(getXdgConfigDir(this.userHome.fsPath, this.productService.nameShort), 'policy.json'));
+ 		}
+ 		return undefined;
+ 	}
+diff --git a/src/vs/platform/sandbox/common/terminalSandboxService.ts b/src/vs/platform/sandbox/common/terminalSandboxService.ts
+index 8a670b77..ff1f255b 100644
+--- a/src/vs/platform/sandbox/common/terminalSandboxService.ts
++++ b/src/vs/platform/sandbox/common/terminalSandboxService.ts
+@@ -8,6 +8,7 @@ import { Event } from '../../../base/common/event.js';
+ import { URI } from '../../../base/common/uri.js';
+ import { OperatingSystem, OS } from '../../../base/common/platform.js';
+ import { createDecorator } from '../../instantiation/common/instantiation.js';
++import { getXdgStateDir } from '../../environment/common/environmentService.js';
+ import { TerminalCapability } from '../../terminal/common/capabilities/capabilities.js';
+ 
+ export const ITerminalSandboxService = createDecorator<ITerminalSandboxService>('terminalSandboxService');
+@@ -17,6 +18,15 @@ export function getSandboxTempDir(userHome: URI, dataFolderName: string, windowI
+ 	return typeof windowId === 'number' ? URI.joinPath(sandboxRoot, `tmp_vscode_${windowId}`) : sandboxRoot;
+ }
+ 
++/**
++ * Sandbox temp dir for the local machine, following the XDG base directory spec
++ * ($XDG_STATE_HOME/<productName>/tmp).
++ */
++export function getLocalSandboxTempDir(userHome: URI, productName: string, windowId?: number): URI {
++	const sandboxRoot = URI.joinPath(URI.file(getXdgStateDir(userHome.fsPath, productName)), 'tmp');
++	return typeof windowId === 'number' ? URI.joinPath(sandboxRoot, `tmp_vscode_${windowId}`) : sandboxRoot;
++}
++
+ export interface ITerminalSandboxResolvedNetworkDomains {
+ 	allowedDomains: string[];
+ 	deniedDomains: string[];
+diff --git a/src/vs/platform/userDataProfile/electron-main/userDataProfile.ts b/src/vs/platform/userDataProfile/electron-main/userDataProfile.ts
+index 433fc3c4..f727a840 100644
+--- a/src/vs/platform/userDataProfile/electron-main/userDataProfile.ts
++++ b/src/vs/platform/userDataProfile/electron-main/userDataProfile.ts
+@@ -19,6 +19,7 @@ import { URI } from '../../../base/common/uri.js';
+ import { NativeParsedArgs } from '../../environment/common/argv.js';
+ import { env } from '../../../base/common/process.js';
+ import { join, resolve } from '../../../base/common/path.js';
++import { getXdgDataDir } from '../../environment/common/environmentService.js';
+ 
+ export const IUserDataProfilesMainService = refineServiceDecorator<IUserDataProfilesService, IUserDataProfilesMainService>(IUserDataProfilesService);
+ export interface IUserDataProfilesMainService extends IUserDataProfilesService {
+@@ -43,7 +44,7 @@ export class UserDataProfilesMainService extends UserDataProfilesService impleme
+ 		@IProductService productService: IProductService,
+ 	) {
+ 		super(stateService, uriIdentityService, environmentService, fileService, logService);
+-		this.agentPluginsHome = URI.file(getAgentPluginsPath(environmentService.args, joinPath(environmentService.userHome, productService.dataFolderName)));
++		this.agentPluginsHome = URI.file(getAgentPluginsPath(environmentService.args, URI.file(getXdgDataDir(environmentService.userHome.fsPath, productService.nameShort))));
+ 	}
+ 
+ 	protected override createDefaultProfile(): IUserDataProfile {
+diff --git a/src/vs/workbench/contrib/mcp/common/mcpSandboxService.ts b/src/vs/workbench/contrib/mcp/common/mcpSandboxService.ts
+index b48953da..3f1b35ff 100644
+--- a/src/vs/workbench/contrib/mcp/common/mcpSandboxService.ts
++++ b/src/vs/workbench/contrib/mcp/common/mcpSandboxService.ts
+@@ -21,7 +21,7 @@ import { ILogService } from '../../../../platform/log/common/log.js';
+ import { IMcpResourceScannerService, McpResourceTarget } from '../../../../platform/mcp/common/mcpResourceScannerService.js';
+ import { IProductService } from '../../../../platform/product/common/productService.js';
+ import { IRemoteAgentEnvironment } from '../../../../platform/remote/common/remoteAgentEnvironment.js';
+-import { getSandboxTempDir } from '../../../../platform/sandbox/common/terminalSandboxService.js';
++import { getLocalSandboxTempDir, getSandboxTempDir } from '../../../../platform/sandbox/common/terminalSandboxService.js';
+ import { IRemoteAgentService } from '../../../services/remote/common/remoteAgentService.js';
+ import { IMcpSandboxConfiguration, McpServerType } from '../../../../platform/mcp/common/mcpPlatformTypes.js';
+ import { IMcpPotentialSandboxBlock, McpServerDefinition, McpServerLaunch, McpServerTransportStdio, McpServerTransportType } from './mcpTypes.js';
+@@ -396,10 +396,11 @@ export class McpSandboxService extends Disposable implements IMcpSandboxService
+ 		if (!userHome) {
+ 			throw new Error('Cannot create MCP sandbox settings because no user home is available');
+ 		}
+-		const dataFolderName = remoteEnv
+-			? this._productService.serverDataFolderName ?? this._productService.dataFolderName
+-			: this._productService.dataFolderName;
+ 		const workbenchEnv = this._environmentService as IEnvironmentService & { window?: { id?: number } };
++		if (!remoteEnv) {
++			return getLocalSandboxTempDir(userHome, this._productService.nameShort, workbenchEnv.window?.id);
++		}
++		const dataFolderName = this._productService.serverDataFolderName ?? this._productService.dataFolderName;
+ 		return getSandboxTempDir(userHome, dataFolderName, workbenchEnv.window?.id);
+ 	}
+ 
+diff --git a/src/vs/workbench/contrib/terminalContrib/chatAgentTools/common/terminalSandboxService.ts b/src/vs/workbench/contrib/terminalContrib/chatAgentTools/common/terminalSandboxService.ts
+index a6fcc6e4..3729c9c7 100644
+--- a/src/vs/workbench/contrib/terminalContrib/chatAgentTools/common/terminalSandboxService.ts
++++ b/src/vs/workbench/contrib/terminalContrib/chatAgentTools/common/terminalSandboxService.ts
+@@ -24,7 +24,7 @@ import { SANDBOX_HELPER_CHANNEL_NAME, SandboxHelperChannelClient } from '../../.
+ import { ISandboxDependencyStatus, ISandboxHelperService } from '../../../../../platform/sandbox/common/sandboxHelperService.js';
+ import { ITerminalSandboxEngineHost, ITerminalSandboxRuntimeInfo, TerminalSandboxEngine } from '../../../../../platform/sandbox/common/terminalSandboxEngine.js';
+ import { readSandboxSetting, SANDBOX_SETTING_KEYS } from './sandboxSettingsReader.js';
+-import { getSandboxTempDir, ITerminalSandboxService, TerminalSandboxPreCheckRemediation, type ISandboxDependencyInstallOptions, type ISandboxDependencyInstallResult, type ITerminalSandboxCommand, type ITerminalSandboxFileAccessCheckResult, type ITerminalSandboxPrecheckInputs, type ITerminalSandboxPrerequisiteCheckResult, type ITerminalSandboxResolvedNetworkDomains, type ITerminalSandboxWrapResult, type TerminalSandboxFileAccessPermission } from '../../../../../platform/sandbox/common/terminalSandboxService.js';
++import { getLocalSandboxTempDir, getSandboxTempDir, ITerminalSandboxService, TerminalSandboxPreCheckRemediation, type ISandboxDependencyInstallOptions, type ISandboxDependencyInstallResult, type ITerminalSandboxCommand, type ITerminalSandboxFileAccessCheckResult, type ITerminalSandboxPrecheckInputs, type ITerminalSandboxPrerequisiteCheckResult, type ITerminalSandboxResolvedNetworkDomains, type ITerminalSandboxWrapResult, type TerminalSandboxFileAccessPermission } from '../../../../../platform/sandbox/common/terminalSandboxService.js';
+ import { TerminalCapability } from '../../../../../platform/terminal/common/capabilities/capabilities.js';
+ import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
+ import { getVSCodeSandboxReadRoots } from '../../../../../platform/agentHost/common/vscodeSandboxPaths.js';
+@@ -217,7 +217,7 @@ export class TerminalSandboxService extends Disposable implements ITerminalSandb
+ 
+ 		const nativeEnv = this._environmentService as IEnvironmentService & { userHome?: URI };
+ 		if (nativeEnv.userHome) {
+-			return getSandboxTempDir(nativeEnv.userHome, this._productService.dataFolderName, windowId);
++			return getLocalSandboxTempDir(nativeEnv.userHome, this._productService.nameShort, windowId);
+ 		}
+ 		return undefined;
+ 	}
