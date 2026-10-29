@@ -3,7 +3,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/todouu/code/master/custom/install.sh | sh
 #   sh install.sh --uninstall
 # Env: CODE_REPO (default todouu/code), CODE_PREFIX (default ~/.local),
-#      CODE_NO_SANDBOX=1 (launch with --no-sandbox, see CUSTOM.md)
+#      CODE_NO_SANDBOX=1 (launch with --no-sandbox, see README.md)
 set -eu
 
 REPO="${CODE_REPO:-todouu/code}"
@@ -61,7 +61,7 @@ if [ -z "$NOSANDBOX" ]; then
   if [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo 0)" = "1" ] \
      || [ "$(cat /proc/sys/kernel/unprivileged_userns_clone 2>/dev/null || echo 1)" = "0" ]; then
     echo "WARNING: this system restricts unprivileged user namespaces, Code may fail to start."
-    echo "         Re-run with CODE_NO_SANDBOX=1 to launch with --no-sandbox (less secure), see CUSTOM.md."
+    echo "         Re-run with CODE_NO_SANDBOX=1 to launch with --no-sandbox (less secure), see README.md."
   fi
 fi
 

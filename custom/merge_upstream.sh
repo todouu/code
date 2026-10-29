@@ -14,6 +14,9 @@ git fetch --no-tags upstream master
 
 git merge --no-edit "${TARGET}" || true
 
+# Keep our README when upstream's conflicts with it.
+if git ls-files -u -- README.md | grep -q .; then git checkout --ours -- README.md && git add README.md; fi
+
 # Remove every workflow that is not ours (also resolves modify/delete conflicts).
 git ls-files -z -- .github/workflows | { grep -zv '/custom-' || true; } | xargs -0 -r git rm -q -f --ignore-unmatch --
 
